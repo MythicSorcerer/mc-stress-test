@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "description": "CLI and local monitoring dashboard for load-testing an isolated Minecraft server clone",
-  "engines": { "node": ">=20" },
+  "engines": { "node": ">=22.5" },
   "scripts": {
     "start": "node mc-loadtest",
     "ui": "node mc-loadtest --ui"

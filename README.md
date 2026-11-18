@@ -1,12 +1,12 @@
 # Minecraft load test CLI
 
-A command-line Minecraft clone load tester with a local monitoring dashboard. It can connect bots in chat-only mode, run `/login` and `/register` checks with a shared test password, and optionally make authenticated or chat-only bots move. The dashboard shows each bot's connection state and the incoming chat it receives.
+A command-line Minecraft clone load tester with a local monitoring dashboard. It can connect bots with optional authentication and chat testing, and optionally make bots move. The dashboard shows each bot's connection state and the incoming chat it receives.
 
 This is a private tool, not an npm package. `package.json` only installs the runtime dependency.
 
 ## Install
 
-Use Node.js 20 or newer:
+Use Node.js 22.5 or newer:
 
 ```sh
 npm install
@@ -30,25 +30,27 @@ Then open `http://127.0.0.1:8787` on your computer. Set a different local port w
 
 Use the **Light mode** toggle in the header to switch themes; the preference is saved in that browser.
 
-Choose a bot count (default 20), enter a clone server address, select an authentication mode and movement profile, and type `YES` to start. The dashboard connects at one bot per second and lets you stop the run. It displays connection attempts, reconnects, per-bot status, ping, incoming server chat, authentication events, and chat test markers.
+Choose a bot count (default 20), enter a clone server address, select an authentication mode and movement profile, choose independently whether to send a chat marker, and type `YES` to start. The dashboard connects at one bot per second and lets you stop the run. It displays connection attempts, reconnects, per-bot status, ping, incoming server chat, authentication events, and chat test markers.
 
 ### Modes
 
-- **Chat only:** skips authentication, waits three seconds after spawn, then sends `LoadTest: LoadBotNNN chat test` once per bot.
-- **Login:** sends `/login <password>` three seconds after spawn.
-- **Register:** sends `/register <password> <password>` three seconds after spawn.
+- **No authentication:** skips login and registration.
+- **Login:** sends `/login <password>` after connection.
+- **Register:** sends `/register <password> <password>` after connection.
 
-The login and register templates and the success/failure message patterns are read from `login-commands.json`. Use `{password}` in command templates. Passwords containing spaces or Brigadier-special characters are wrapped in escaped quotes automatically; enter the password itself without adding quote marks. A hidden password field accepts the shared test password, keeps it in memory for the run, and clears the browser field after the run starts. Passwords are not included in the dashboard activity or chat feed; matching text in incoming server messages is replaced with `[hidden]`.
+Chat testing is independent of authentication. With authentication enabled, the chat marker is sent only after the server confirms login or registration; with no authentication, it is sent after spawn. Incoming chat shows explicit notices when authentication succeeds and when the marker is sent.
+
+The login and register templates and the success/failure message patterns are read from `login-commands.json`. Use `{password}` in command templates. Passwords containing spaces or Brigadier-special characters are wrapped in escaped quotes automatically; enter the password itself without adding quote marks. You can choose a saved password profile or enter a password and name a profile to save it. Profiles are stored in `~/.mc-loadtest/credentials.sqlite` (override with `MC_LOADTEST_DB`). **Passwords are stored as plain text**; protect the database file and machine accordingly. Passwords are not included in dashboard activity or chat messages; matching text in incoming server messages is replaced with `[hidden]`.
 
 The dashboard reports a bot as authenticated only when an incoming message matches the configured `success` pattern. The default pattern includes EasyAuth's “You are now authenticated.” reply for both successful registration and login. The activity feed shows the command shape sent to each bot with the password hidden, including quotes when the password needs them. If your auth plugin uses different wording, its messages remain visible in **Incoming chat** so you can tune `login-commands.json`. A bot that cannot connect, spawn, or authenticate retries up to five times, with a growing delay between attempts.
 
 ### Movement profiles
 
-- **Stationary:** sends the chat marker and stays still.
+- **Stationary:** stays still.
 - **Wander:** walks around its spawn point, staying within about 32 blocks and occasionally pausing.
 - **Continuous:** keeps moving and sprints more often.
 
-In chat-only mode, movement starts after the bot sends its marker, so the dashboard confirms chat first.
+Movement starts after spawn; chat testing can be enabled or disabled independently.
 
 ## CLI
 

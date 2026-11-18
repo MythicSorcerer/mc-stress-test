@@ -131,7 +131,7 @@ class BotManager extends EventEmitter {
       const spawnTimeout = setTimeout(() => { if (!rec.spawned) this.close(rec, 'spawn timeout', false) }, this.config.spawnTimeoutMs || 45000)
       rec.spawnTimer = spawnTimeout
       rec.timers.push(spawnTimeout)
-      if (!this.config.auth?.chatTestOnly) this.beginAuthentication(rec)
+      if (!this.config.auth?.chatTestOnly && this.config.auth?.enabled !== false) this.beginAuthentication(rec)
     })
     bot.on('spawn', () => {
       if (rec.closed || rec.spawned) return
@@ -149,6 +149,10 @@ class BotManager extends EventEmitter {
           this.startMovement(rec)
         }, auth.chatTestDelayMs ?? 3000)
         rec.timers.push(delay)
+        return
+      }
+      if (auth.enabled === false) {
+        this.startMovement(rec)
         return
       }
       this.beginAuthentication(rec)
@@ -260,7 +264,7 @@ class BotManager extends EventEmitter {
     let previous = null
     const update = () => {
       const bot = rec.bot
-      if (rec.closed || (!rec.authenticated && !this.config.auth?.chatTestOnly) || !bot.entity?.position) return
+      if (rec.closed || (!rec.authenticated && this.config.auth?.enabled !== false && !this.config.auth?.chatTestOnly) || !bot.entity?.position) return
       const mode = rec.mode
       if (mode === 'idle') { this.clearControls(bot); return }
       const p = bot.entity.position

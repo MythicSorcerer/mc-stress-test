@@ -6,6 +6,7 @@ const fs = require('node:fs')
 const path = require('node:path')
 const { BotManager } = require('./bots')
 const { resolveTargetInput, formatTarget } = require('./target')
+const { CredentialStore } = require('./credential-store')
 
 const MAX_BOTS = 100
 const MAX_BODY_BYTES = 32768
@@ -21,14 +22,17 @@ body.light{color-scheme:light;--bg:#eff4f7;--panel:#fff;--panel2:#f6f9fb;--line:
 <div class="layout"><aside class="panel controls"><h2>Start a test</h2><form id="startForm">
 <label class="field"><span>Bot count</span><input id="count" type="number" min="1" max="100" value="20" required><div class="hint">Connects at one bot per second. Maximum 100.</div></label>
 <label class="field"><span>Clone server address</span><input id="target" type="text" placeholder="play.example.net or example.net:25570" required><div class="hint">Domains use the Minecraft SRV record when no port is entered. IPs default to 25565.</div></label>
-<label class="field"><span>Test mode</span><select id="mode"><option value="chat">Chat only (skip authentication)</option><option value="login">Login existing accounts · L · /login</option><option value="register">Register new accounts · R · /register</option></select></label>
-<label class="field"><span>Bot movement</span><select id="movement"><option value="stationary">Stationary</option><option value="wander">Wander within 32 blocks</option><option value="continuous">Continuous movement</option></select><div class="hint">Movement starts after the chat marker in chat-only mode.</div></label>
+<label class="field"><span>Authentication</span><select id="mode"><option value="none">None</option><option value="login">Log in existing accounts · /login</option><option value="register">Register new accounts · /register</option></select></label>
+<label class="field"><span>Chat test</span><select id="chatTest"><option value="true">Send a chat marker</option><option value="false">Do not send a chat marker</option></select><div class="hint">With no auth, the marker is sent after spawn; otherwise it follows successful login or registration.</div></label>
+<label class="field" id="credentialProfileField" hidden><span>Saved password profile</span><select id="credentialId"><option value="">Enter password below</option></select></label>
+<label class="field"><span>Bot movement</span><select id="movement"><option value="stationary">Stationary</option><option value="wander">Wander within 32 blocks</option><option value="continuous">Continuous movement</option></select><div class="hint">Movement starts after spawn; chat testing is independent.</div></label>
 <label class="field" id="passwordField" hidden><span>Shared test password</span><input id="password" type="password" autocomplete="new-password" maxlength="128" placeholder="Hidden from dashboard logs"><div class="hint">Sent privately to the clone’s auth plugin. Multiword or special-character passwords are quoted automatically; enter the password without surrounding quotes.</div></label>
+<label class="field" id="profileNameField" hidden><span>Save password as</span><input id="profileName" type="text" maxlength="80" autocomplete="off" placeholder="Optional profile name"><div class="hint">Saved in a local SQLite database as plain text. Anyone with access to that file can read it.</div></label>
 <label class="field"><span>Confirmation</span><input id="confirm" type="text" autocomplete="off" placeholder="Type YES to start" required></label>
 <div class="check">Run this only on an isolated clone you administer. Bots will connect to the resolved target shown in the dashboard.</div>
 <div class="actions"><button id="startButton" class="primary" type="submit">Start test</button><button id="stopButton" class="stop" type="button" disabled>Stop</button></div><div id="notice" class="notice" role="status"></div></form></aside>
 <section class="maincol"><div class="stats">
-<div class="panel stat"><label>Connected</label><strong id="connected">0 / 0</strong><small>active clients</small></div><div class="panel stat"><label>Authenticated</label><strong id="authenticated">0</strong><small id="authModeLabel">chat-only skips auth</small></div><div class="panel stat"><label>Chat markers</label><strong id="chatSent">0</strong><small>sent successfully</small></div><div class="panel stat"><label>Auth / connection failures</label><strong id="failed">0</strong><small>retries up to 5 times</small></div>
+<div class="panel stat"><label>Connected</label><strong id="connected">0 / 0</strong><small>active clients</small></div><div class="panel stat"><label>Authenticated</label><strong id="authenticated">0</strong><small id="authModeLabel">Depends on authentication setting</small></div><div class="panel stat"><label>Chat markers</label><strong id="chatSent">0</strong><small>sent successfully</small></div><div class="panel stat"><label>Auth / connection failures</label><strong id="failed">0</strong><small>retries up to 5 times</small></div>
 </div><div class="panel target-line"><b>Resolved target:</b> <span id="resolvedTarget">—</span> <span id="modeSummary"></span></div>
 <div class="cols"><section class="panel section"><div class="sectionhead"><h2>Bot status</h2><span id="botCount" class="counter">0 bots</span></div><div class="tablewrap"><table><thead><tr><th>Bot</th><th>Status</th><th>Attempts</th><th>Retries</th><th>Ping</th><th>Last detail</th></tr></thead><tbody id="botRows"><tr><td colspan="6" class="empty">Bots appear here after a test starts.</td></tr></tbody></table></div></section>
 <div class="feeds"><section class="panel section"><div class="sectionhead"><h2>Incoming chat</h2><span id="chatCount" class="counter">0 messages</span></div><div id="chatFeed" class="feedbox"><div class="empty">Server messages received by bots will appear here.</div></div></section><section class="panel section"><div class="sectionhead"><h2>Activity</h2><span id="eventCount" class="counter">0 events</span></div><div id="eventFeed" class="feedbox"><div class="empty">Connection and authentication events will appear here.</div></div></section></div></div></section></div>
@@ -40,16 +44,19 @@ let savedTheme='dark';try{savedTheme=localStorage.getItem('mc-loadtest-theme')||
 $('themeToggle').addEventListener('click',()=>{const theme=document.body.classList.contains('light')?'dark':'light';applyTheme(theme);try{localStorage.setItem('mc-loadtest-theme',theme)}catch{}});
 const escTime=value=>{try{return new Date(value).toLocaleTimeString()}catch{return ''}};
 function statusClass(status){if(['authenticated','spawned','connected','chat sent'].includes(status))return 'good';if(['failed','auth failed','kicked','connection error'].includes(status))return 'bad';if(['connecting','reconnecting','authenticating'].includes(status))return 'warn';return ''}
-function drawState(s){latestState=s||{};const r=s.stats||{};$('connected').textContent=(r.connected||0)+' / '+(r.target||0);$('authenticated').textContent=r.authenticated||0;$('chatSent').textContent=r.chatTestSent||0;$('failed').textContent=(r.failedConnections||0)+(r.authFailures||0);$('resolvedTarget').textContent=s.target||'—';$('modeSummary').textContent=s.mode?(' · '+s.mode+' · '+(s.movement||'stationary')):'';$('authModeLabel').textContent=s.mode==='chat'?'chat-only skips auth':(s.mode==='register'?'register successes':'login successes');$('botCount').textContent=(r.bots||[]).length+' bots';$('runBadge').textContent=s.running?'Running · '+(s.mode||'')+' · '+(s.movement||'stationary'): 'Idle · waiting for a run';$('runBadge').classList.toggle('live',!!s.running);$('startButton').disabled=!!s.running;$('stopButton').disabled=!s.running;
+function drawState(s){latestState=s||{};const r=s.stats||{};$('connected').textContent=(r.connected||0)+' / '+(r.target||0);$('authenticated').textContent=r.authenticated||0;$('chatSent').textContent=r.chatTestSent||0;$('failed').textContent=(r.failedConnections||0)+(r.authFailures||0);$('resolvedTarget').textContent=s.target||'—';$('modeSummary').textContent=s.mode?(' · '+s.mode+' · '+(s.movement||'stationary')):'';$('authModeLabel').textContent=s.mode==='none'?'auth skipped':(s.mode==='register'?'register successes':'login successes');$('botCount').textContent=(r.bots||[]).length+' bots';$('runBadge').textContent=s.running?'Running · '+(s.mode||'')+' · '+(s.movement||'stationary'): 'Idle · waiting for a run';$('runBadge').classList.toggle('live',!!s.running);$('startButton').disabled=!!s.running;$('stopButton').disabled=!s.running;
 const rows=r.bots||[];$('botRows').replaceChildren();if(!rows.length){const tr=document.createElement('tr'),td=document.createElement('td');td.colSpan=6;td.className='empty';td.textContent='Bots appear here after a test starts.';tr.append(td);$('botRows').append(tr)}else for(const b of rows){const tr=document.createElement('tr');const name=document.createElement('td');name.textContent=b.username;const st=document.createElement('td'),span=document.createElement('span'),dot=document.createElement('i');span.className='status';dot.className='dot '+statusClass(b.status);span.append(dot,document.createTextNode(b.status||'waiting'));st.append(span);const attempt=document.createElement('td');attempt.textContent=String(b.attempts||0);const retries=document.createElement('td');retries.textContent=String(b.reconnects||0);const ping=document.createElement('td');ping.textContent=b.ping==null?'—':Math.round(b.ping)+' ms';const detail=document.createElement('td');detail.textContent=b.reason||b.authMode||'';tr.append(name,st,attempt,retries,ping,detail);$('botRows').append(tr)}drawFeeds()}
 function drawFeeds(){ $('chatCount').textContent=chats.length+' messages';$('eventCount').textContent=events.length+' events';drawFeed('chatFeed',chats,'No server messages received yet.','chat');drawFeed('eventFeed',events,'No activity yet.','event') }
-function drawFeed(id,list,empty,type){const box=$(id);box.replaceChildren();if(!list.length){const d=document.createElement('div');d.className='empty';d.textContent=empty;box.append(d);return}for(const e of list.slice(-250)){const row=document.createElement('div');row.className=type==='chat'?'feedrow':'eventrow';const time=document.createElement('span');time.className='time';time.textContent=escTime(e.time);const who=document.createElement('span');who.className=type==='chat'?'botname':'botname';who.textContent=type==='chat'?e.username:(e.username||'system');const msg=document.createElement('span');msg.className='message';const detail=e.reason||e.safeCommand||e.command||'';msg.textContent=type==='chat'?e.message:(e.type+(detail?': '+detail:''));row.append(time,who,msg);box.append(row)}box.scrollTop=box.scrollHeight}
-function receive(e){if(e.type==='chat_message'||e.type==='chat_notice'){chats.push(e);if(chats.length>500)chats.shift()}else{events.push(e);if(events.length>300)events.shift()}drawFeeds()}
+ function drawFeed(id,list,empty,type){const box=$(id);box.replaceChildren();if(!list.length){const d=document.createElement('div');d.className='empty';d.textContent=empty;box.append(d);return}for(const e of list.slice(-250)){const row=document.createElement('div');row.className=type==='chat'?'feedrow':'eventrow';const time=document.createElement('span');time.className='time';time.textContent=escTime(e.time);const who=document.createElement('span');who.className=type==='chat'?'botname':'botname';who.textContent=type==='chat'?(e.botCount>1?e.botCount+' bots':e.username):(e.username||'system');const msg=document.createElement('span');msg.className='message';const detail=e.reason||e.safeCommand||e.command||'';msg.textContent=type==='chat'?e.message:(e.type+(detail?': '+detail:''));row.append(time,who,msg);box.append(row)}box.scrollTop=box.scrollHeight}
+ function receive(e){if(e.type==='chat_message'||e.type==='chat_notice'){if(e.type==='chat_message'){const previous=[...chats].reverse().find(item=>item.type==='chat_message'&&item.message===e.message&&Date.now()-Date.parse(item.time)<3000);if(previous){previous.seenBy||=[previous.username];if(!previous.seenBy.includes(e.username)){previous.seenBy.push(e.username);previous.botCount=previous.seenBy.length;previous.time=e.time}}else chats.push({...e,botCount:1,seenBy:[e.username]})}else chats.push(e);if(chats.length>500)chats.shift()}else{events.push(e);if(events.length>300)events.shift()}drawFeeds()}
 async function refresh(){try{const r=await fetch('/api/state',{headers:{'x-session-token':TOKEN},cache:'no-store'});if(r.ok){const s=await r.json();drawState(s);if(s.chatMessages){chats=s.chatMessages;events=s.recentEvents||[];drawFeeds()}}}catch{}}
-$('mode').addEventListener('change',()=>{$('passwordField').hidden=$('mode').value==='chat'});
-$('startForm').addEventListener('submit',async ev=>{ev.preventDefault();const n=$('notice');n.className='notice';n.textContent='Resolving target and starting…';const body={count:Number($('count').value),target:$('target').value.trim(),mode:$('mode').value,movement:$('movement').value,password:$('password').value,confirmation:$('confirm').value.trim()};try{const r=await fetch('/api/start',{method:'POST',headers:{'content-type':'application/json','x-session-token':TOKEN},body:JSON.stringify(body)});const data=await r.json();if(!r.ok)throw new Error(data.error||'Could not start test.');$('password').value='';$('confirm').value='';n.className='notice ok';n.textContent='Started against '+data.target;chats=[];events=[];await refresh()}catch(err){n.className='notice error';n.textContent=err.message}});
+function updateCredentialFields(){$('credentialProfileField').hidden=$('mode').value==='none';$('passwordField').hidden=$('mode').value==='none';$('profileNameField').hidden=$('mode').value==='none'}
+$('mode').addEventListener('change',updateCredentialFields);
+$('credentialId').addEventListener('change',async()=>{const id=$('credentialId').value;if(!id)return;try{const r=await fetch('/api/credentials/'+encodeURIComponent(id),{headers:{'x-session-token':TOKEN},cache:'no-store'});if(r.ok){const credential=await r.json();$('password').value=credential.password;$('profileName').value=credential.name}}catch{}});
+async function loadCredentialProfiles(){try{const r=await fetch('/api/credentials',{headers:{'x-session-token':TOKEN},cache:'no-store'});if(!r.ok)return;const rows=await r.json();const select=$('credentialId');while(select.options.length>1)select.remove(1);for(const row of rows){const option=document.createElement('option');option.value=String(row.id);option.textContent=row.name;select.append(option)}}catch{}}
+$('startForm').addEventListener('submit',async ev=>{ev.preventDefault();const n=$('notice');n.className='notice';n.textContent='Resolving target and starting…';const body={count:Number($('count').value),target:$('target').value.trim(),mode:$('mode').value,chatTest:$('chatTest').value==='true',movement:$('movement').value,password:$('password').value,credentialId:$('credentialId').value||null,profileName:$('profileName').value.trim(),confirmation:$('confirm').value.trim()};try{const r=await fetch('/api/start',{method:'POST',headers:{'content-type':'application/json','x-session-token':TOKEN},body:JSON.stringify(body)});const data=await r.json();if(!r.ok)throw new Error(data.error||'Could not start test.');$('password').value='';$('profileName').value='';$('credentialId').value='';$('confirm').value='';n.className='notice ok';n.textContent='Started against '+data.target;chats=[];events=[];await loadCredentialProfiles();await refresh()}catch(err){n.className='notice error';n.textContent=err.message}});
  $('stopButton').addEventListener('click',async()=>{const button=$('stopButton'),notice=$('notice');button.disabled=true;notice.className='notice';notice.textContent='Stopping bots…';try{const response=await fetch('/api/stop',{method:'POST',headers:{'x-session-token':TOKEN}});const data=await response.json();if(!response.ok)throw new Error(data.error||'Could not stop the test.');await refresh();notice.className='notice ok';notice.textContent='Bots stopped.'}catch(error){notice.className='notice error';notice.textContent=error.message||'Could not reach the dashboard.';button.disabled=!latestState.running}});
-async function init(){await refresh();const source=new EventSource('/api/events?token='+encodeURIComponent(TOKEN));source.onmessage=ev=>{try{const d=JSON.parse(ev.data);if(d.kind==='event')receive(d.event);else if(d.kind==='state')drawState(d.state)}catch{}};setInterval(refresh,5000)}init();
+async function init(){updateCredentialFields();await loadCredentialProfiles();await refresh();const source=new EventSource('/api/events?token='+encodeURIComponent(TOKEN));source.onmessage=ev=>{try{const d=JSON.parse(ev.data);if(d.kind==='event')receive(d.event);else if(d.kind==='state')drawState(d.state)}catch{}};setInterval(refresh,5000)}init();
 </script></body></html>`
 }
 
@@ -67,7 +74,8 @@ function readJsonBody(req) {
   })
 }
 
-function startWebUI() {
+async function startWebUI() {
+  const credentialStore = await CredentialStore.open()
   const token = crypto.randomBytes(32).toString('hex')
   const clients = new Set()
   let manager = null
@@ -78,6 +86,21 @@ function startWebUI() {
   let startedAt = null
   let recentEvents = []
   let chatMessages = []
+  const addChatMessage = item => {
+    const previous = [...chatMessages].reverse().find(message =>
+      message.type === 'chat_message' && message.message === item.message &&
+      Date.parse(item.time) - Date.parse(message.time) < 3000 &&
+      Date.parse(item.time) >= Date.parse(message.time))
+    if (previous) {
+      previous.seenBy ||= [previous.username]
+      if (!previous.seenBy.includes(item.username)) {
+        previous.seenBy.push(item.username)
+        previous.botCount = previous.seenBy.length
+        previous.time = item.time
+      }
+    } else chatMessages.push({ ...item, botCount: 1, seenBy: [item.username] })
+    if (chatMessages.length > 500) chatMessages.shift()
+  }
 
   const state = (includeFeeds = false) => ({
     running, target: targetLabel, mode: modeLabel, movement: movementLabel, startedAt,
@@ -105,6 +128,18 @@ function startWebUI() {
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', 'content-security-policy': "default-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'" })
       res.end(page(token)); return
     }
+    if (req.method === 'GET' && url.pathname === '/api/credentials') {
+      if (!tokenOk(req)) return safeJson(res, 403, { error: 'Invalid dashboard session.' })
+      return safeJson(res, 200, credentialStore.list())
+    }
+    const credentialMatch = url.pathname.match(/^\/api\/credentials\/(\d+)$/)
+    if (req.method === 'GET' && credentialMatch) {
+      if (!tokenOk(req)) return safeJson(res, 403, { error: 'Invalid dashboard session.' })
+      const credential = credentialStore.get(credentialMatch[1])
+      return credential
+        ? safeJson(res, 200, credential)
+        : safeJson(res, 404, { error: 'Saved password profile not found.' })
+    }
     if (req.method === 'GET' && url.pathname === '/api/state') {
       if (!tokenOk(req)) return safeJson(res, 403, { error: 'Invalid dashboard session.' })
       return safeJson(res, 200, state(true))
@@ -129,20 +164,32 @@ function startWebUI() {
       const count = Number(body.count)
       if (!Number.isInteger(count) || count < 1 || count > MAX_BOTS) return safeJson(res, 400, { error: `Choose a whole number from 1 to ${MAX_BOTS}.` })
       if (body.confirmation !== 'YES') return safeJson(res, 400, { error: 'Type YES in the confirmation field to start.' })
-      if (!['chat', 'login', 'register'].includes(body.mode)) return safeJson(res, 400, { error: 'Choose chat, login, or register mode.' })
+      if (!['none', 'login', 'register'].includes(body.mode)) return safeJson(res, 400, { error: 'Choose no authentication, login, or register mode.' })
+      if (typeof body.chatTest !== 'boolean') return safeJson(res, 400, { error: 'Choose whether to send a chat test.' })
       if (!['stationary', 'wander', 'continuous'].includes(body.movement)) return safeJson(res, 400, { error: 'Choose stationary, wander, or continuous movement.' })
-      if (body.mode !== 'chat' && (typeof body.password !== 'string' || !body.password.length || body.password.length > 128)) return safeJson(res, 400, { error: 'Enter a test password of 1 to 128 characters.' })
+      let password = body.password
+      if (body.mode !== 'none' && !password && body.credentialId) {
+        const saved = credentialStore.get(body.credentialId)
+        if (!saved) return safeJson(res, 400, { error: 'Saved password profile not found.' })
+        password = saved.password
+      }
+      if (body.mode !== 'none' && (typeof password !== 'string' || !password.length || password.length > 128 || password.includes('\0'))) return safeJson(res, 400, { error: 'Enter a test password of 1 to 128 characters.' })
+      if (typeof body.profileName === 'string' && body.profileName.trim()) {
+        if (body.profileName.trim().length > 80) return safeJson(res, 400, { error: 'Password profile names must be 80 characters or fewer.' })
+        if (body.mode === 'none') return safeJson(res, 400, { error: 'Choose login or register to save a password profile.' })
+      }
       let target
       try { target = await resolveTargetInput(String(body.target || '')) } catch (error) { return safeJson(res, 400, { error: error.message }) }
+      if (typeof body.profileName === 'string' && body.profileName.trim()) credentialStore.save(body.profileName, password)
       let commands = {}
-      if (body.mode !== 'chat') {
+      if (body.mode !== 'none') {
         try { commands = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'login-commands.json'), 'utf8')) }
         catch { return safeJson(res, 500, { error: 'Could not read login-commands.json.' }) }
       }
-      const auth = body.mode === 'chat'
-        ? { chatTestOnly: true, chatTestDelayMs: 3000, chatTestMessage: 'LoadTest: {username} chat test' }
+      const auth = body.mode === 'none'
+        ? (body.chatTest ? { chatTestOnly: true, chatTestDelayMs: 3000, chatTestMessage: 'LoadTest: {username} chat test' } : { enabled: false })
         : {
-            password: body.password,
+            password,
             registerCommand: commands.registerCommand,
             loginCommand: commands.loginCommand,
             success: commands.success,
@@ -152,7 +199,7 @@ function startWebUI() {
             initialCommand: body.mode,
             initialDelayMs: 3000,
             timeoutMs: commands.timeoutMs || 30000,
-            chatTestMessage: 'LoadTest: {username} authenticated chat test',
+            chatTestMessage: body.chatTest ? 'LoadTest: {username} authenticated chat test' : '',
             chatAfterSuccessDelayMs: 500
           }
       targetLabel = formatTarget(target)
@@ -171,7 +218,7 @@ function startWebUI() {
       try {
         require.resolve('@wp2508/mineflayer')
         manager = new BotManager(config, item => {
-          if (item.type === 'chat_message') { chatMessages.push(item); if (chatMessages.length > 500) chatMessages.shift() }
+          if (item.type === 'chat_message') addChatMessage(item)
           else {
             recentEvents.push(item)
             if (recentEvents.length > 300) recentEvents.shift()
@@ -222,6 +269,7 @@ function startWebUI() {
     if (manager && running) { running = false; manager.stop() }
     for (const client of clients) client.end()
     clients.clear()
+    credentialStore.close()
     server.close(() => process.exit(0))
     setTimeout(() => process.exit(0), 1000).unref()
   }
