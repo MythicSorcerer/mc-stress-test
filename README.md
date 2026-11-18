@@ -21,7 +21,7 @@ Edit `login-commands.json` to match the messages and commands used by your authe
 /login <password>
 ```
 
-Keep `{password}` in the command templates. The CLI asks for the shared bot password without echoing it, or reads it from `MC_LOADTEST_PASSWORD`. The password is not written to the command file or printed to the terminal.
+Keep `{password}` in the command templates. The CLI asks for the shared bot password without echoing it, or reads it from `MC_LOADTEST_PASSWORD`. The password is not written to the command file or printed to the terminal. The chosen command is sent 3 seconds after each bot spawns to let the server finish initializing the connection.
 
 ## Run
 
@@ -29,7 +29,7 @@ Keep `{password}` in the command templates. The CLI asks for the shared bot pass
 ./mc-loadtest
 ```
 
-The CLI asks for bot count and target IP (optionally with a port; default 25565), displays the target, then requires you to type `YES` before it connects. It defaults to Minecraft 26.3, creates usernames `LoadBot001`, `LoadBot002`, and so on, connects at one bot per second, authenticates, and has the bots walk around their spawn area. Press Ctrl-C to disconnect them and stop.
+The CLI asks for bot count (default 20), target IP (optionally with a port; default 25565), and whether to log in existing accounts (L) or register new accounts (R), displays the target, then requires you to type `YES` before it connects. It defaults to Minecraft 26.3, creates usernames `LoadBot001`, `LoadBot002`, and so on, connects at one bot per second, authenticates, and has the bots walk around their spawn area. Press Ctrl-C to disconnect them and stop.
 
 This uses the third-party `@wp2508/mineflayer` fork because it claims Minecraft 26.3 support. Verify one bot can connect, authenticate, and move on your isolated clone before running a larger group. The fork and the full workflow have not been integration-tested here.
 
