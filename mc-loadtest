@@ -1,36 +1,12 @@
 #!/usr/bin/env node
 'use strict'
 
-const net = require('node:net')
 const readline = require('node:readline/promises')
 const { stdin, stdout } = require('node:process')
 const { BotManager } = require('./src/bots')
+const { parseTarget, resolveTarget, formatTarget } = require('./src/target')
 
 const MAX_BOTS = 100
-const DEFAULT_PORT = 25565
-
-function parseTarget(value) {
-  const input = value.trim()
-  let host = input
-  let port = DEFAULT_PORT
-  const bracketed = input.match(/^\[([^\]]+)\](?::(\d+))?$/)
-  if (bracketed) {
-    host = bracketed[1]
-    if (bracketed[2]) port = Number(bracketed[2])
-  } else if (net.isIP(input) === 6) {
-    host = input
-  } else {
-    const withPort = input.match(/^([^:]+):(\d+)$/)
-    if (withPort) {
-      host = withPort[1]
-      port = Number(withPort[2])
-    }
-  }
-  if (net.isIP(host) === 0) throw new Error('Enter an IPv4 or IPv6 address, optionally followed by :port.')
-  if (host === '0.0.0.0' || host === '::') throw new Error('That is a wildcard address; enter the clone server IP.')
-  if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('Port must be between 1 and 65535.')
-  return { host, port }
-}
 
 async function askBotCount(rl) {
   for (;;) {
@@ -43,20 +19,21 @@ async function askBotCount(rl) {
 
 async function askTarget(rl) {
   for (;;) {
-    const input = await rl.question('Clone server IP [port optional, default 25565]: ')
+    const input = await rl.question('Clone server IP or domain [optional :port; domain uses Minecraft SRV]: ')
     try { return parseTarget(input) } catch (error) { console.log(error.message) }
   }
 }
 
 async function main() {
+  if (process.argv.includes('--ui')) return require('./src/web-ui').startWebUI()
   if (!process.stdin.isTTY || !process.stdout.isTTY) throw new Error('Run ./mc-loadtest in an interactive terminal.')
   const rl = readline.createInterface({ input: stdin, output: stdout })
   let count, target
   try {
     console.log('\nMinecraft clone load test\n')
     count = await askBotCount(rl)
-    target = await askTarget(rl)
-    console.log(`\nTarget: ${target.host}:${target.port}`)
+    target = await resolveTarget(await askTarget(rl))
+    console.log(`\nTarget: ${formatTarget(target)}`)
     console.log(`Bots:   ${count}`)
     console.log('Mode:   send one chat marker per bot; login/register is skipped')
     const confirmation = (await rl.question('\nConfirm this is your isolated clone. Type YES to connect: ')).trim()
@@ -72,7 +49,8 @@ async function main() {
     protocolAdapter: 'experimental-26.3',
     maxBots: count,
     spawnRate: 1,
-    maxReconnects: 2,
+    maxReconnects: 5,
+    reconnectDelayMs: 1500,
     seed: Date.now(),
     auth: { chatTestOnly: true, chatTestDelayMs: 3000, chatTestMessage: 'LoadTest: {username} chat test' },
     movement: { intervalMs: 1500, radius: 32 }
@@ -85,6 +63,7 @@ async function main() {
     manager = new BotManager(config, event => {
       if (event.type === 'chat_test_sent') { chatTestMessagesSent++; console.log(`\nChat test sent: ${event.username}`) }
       else if (event.type === 'chat_test_error') console.log(`\nChat test failed: ${event.username}`)
+      else if (event.type === 'chat_message') console.log(`\n[${event.username} ← server] ${event.message}`)
       else if (event.type === 'authenticated') console.log(`\nAuthenticated: ${event.username}`)
       else if (event.type === 'auth_failure') console.log(`\nAuth failed: ${event.username} (${event.reason})`)
       else if (event.type === 'error') console.log(`\nClient error: ${event.username}`)

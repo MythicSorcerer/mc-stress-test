@@ -29,13 +29,39 @@ class BotManager extends EventEmitter {
     this.counter = 0
     this.nextAttempt = new Map()
     this.failures = new Map()
+    this.botStates = new Map()
     this.lastSpawn = 0
-    this.stats = { attempts: 0, connectedTotal: 0, registrations: 0, authSuccess: 0, authFailures: 0, failedConnections: 0, disconnects: 0, reconnects: 0, packetsIn: 0, packetsOut: 0, connectTimeMsTotal: 0, authTimeMsTotal: 0 }
+    this.stats = { attempts: 0, connectedTotal: 0, registrations: 0, authSuccess: 0, authFailures: 0, failedConnections: 0, disconnects: 0, reconnects: 0, chatTestSent: 0, packetsIn: 0, packetsOut: 0, connectTimeMsTotal: 0, authTimeMsTotal: 0 }
     this.timer = setInterval(() => this.reconcile(), 100)
     this.timer.unref?.()
   }
   event(type, details = {}) {
     const item = { time: new Date().toISOString(), type, ...details }
+    if (item.username) {
+      const match = item.username.match(/(\d+)$/)
+      if (match) {
+        const id = Number(match[1]) - 1
+        const previous = this.botStates.get(id) || { id, username: item.username, attempts: 0, reconnects: 0, chatTestSent: false }
+        const state = { ...previous, username: item.username, lastEvent: type, updatedAt: item.time }
+        if (type === 'connecting') { state.status = 'connecting'; state.attempts = item.attempt || state.attempts + 1; state.reconnects = Math.max(0, state.attempts - 1) }
+        else if (type === 'connected') state.status = 'connected'
+        else if (type === 'spawned') state.status = 'spawned'
+        else if (type === 'auth_command') { state.status = 'authenticating'; state.authMode = item.command }
+        else if (type === 'authenticated') state.status = 'authenticated'
+        else if (type === 'auth_failure') { state.status = 'auth failed'; state.reason = item.reason }
+        else if (type === 'chat_test_sent') { state.chatTestSent = true; if (state.status !== 'authenticated') state.status = 'chat sent'; this.stats.chatTestSent++ }
+        else if (type === 'chat_test_error') state.reason = 'chat test could not be sent'
+        else if (type === 'kicked') { state.status = 'kicked'; state.reason = item.reason || 'server kick' }
+        else if (type === 'error') { state.status = 'connection error'; state.reason = item.reason || 'client error' }
+        else if (type === 'disconnected') {
+          state.reason = item.reason
+          const failures = this.failures.get(id) || 0
+          state.status = item.intentional ? (this.stopped ? 'stopped' : 'disconnected') : failures <= (this.config.maxReconnects ?? 2) ? 'reconnecting' : 'failed'
+          state.reconnects = Math.max(0, failures)
+        }
+        this.botStates.set(id, state)
+      }
+    }
     this.emit('event', item)
     this.notify(item)
   }
@@ -78,7 +104,7 @@ class BotManager extends EventEmitter {
     const failures = this.failures.get(id) || 0
     if (failures) this.stats.reconnects++
     this.stats.attempts++
-    const rec = { id, username, mode: this.modeFor(id), started: Date.now(), authStarted: 0, authenticated: false, connected: false, registered: false, closed: false, intentional: false, commandSent: false, timers: [] }
+    const rec = { id, username, mode: this.modeFor(id), started: Date.now(), authStarted: 0, authenticated: false, connected: false, spawned: false, registered: false, closed: false, intentional: false, commandSent: false, timers: [] }
     this.bots.set(id, rec)
     this.event('connecting', { username, attempt: failures + 1 })
     let bot
@@ -94,9 +120,15 @@ class BotManager extends EventEmitter {
       this.stats.connectedTotal++
       this.stats.connectTimeMsTotal += Date.now() - rec.started
       this.event('connected', { username })
+      const spawnTimeout = setTimeout(() => { if (!rec.spawned) this.close(rec, 'spawn timeout', false) }, this.config.spawnTimeoutMs || 45000)
+      rec.spawnTimer = spawnTimeout
+      rec.timers.push(spawnTimeout)
     })
     bot.on('spawn', () => {
       if (rec.closed || rec.authStarted) return
+      rec.spawned = true
+      if (rec.spawnTimer) clearTimeout(rec.spawnTimer)
+      this.event('spawned', { username })
       rec.authStarted = Date.now()
       const auth = this.config.auth || {}
       if (auth.chatTestOnly) {
@@ -121,9 +153,22 @@ class BotManager extends EventEmitter {
         rec.timers.push(delay)
       }
     })
-    bot.on('messagestr', message => this.authMessage(rec, String(message)))
-    bot.on('error', () => { if (!rec.closed) this.event('error', { username, reason: 'client error' }) })
-    bot.on('kicked', () => { if (!rec.closed) this.event('kicked', { username }) })
+    bot.on('messagestr', message => {
+      const text = this.redact(String(message))
+      this.event('chat_message', { username, message: text })
+      this.authMessage(rec, String(message))
+    })
+    bot.on('error', () => {
+      if (rec.closed) return
+      this.event('error', { username, reason: 'client error' })
+      this.close(rec, 'client error', false)
+    })
+    bot.on('kicked', reason => {
+      if (rec.closed) return
+      const safeReason = this.redact(typeof reason === 'string' ? reason : JSON.stringify(reason || 'server kick'))
+      this.event('kicked', { username, reason: safeReason })
+      this.close(rec, 'server kick', false)
+    })
     bot.on('end', () => this.finish(rec, 'disconnected'))
     if (bot._client?.on) {
       bot._client.on('packet', () => { this.stats.packetsIn++ })
@@ -131,6 +176,10 @@ class BotManager extends EventEmitter {
       const write = bot._client.write
       if (typeof write === 'function') bot._client.write = (...args) => { this.stats.packetsOut++; return write.apply(bot._client, args) }
     }
+  }
+  redact(text) {
+    const password = this.config.auth?.password
+    return password ? String(text).split(password).join('[hidden]') : String(text)
   }
   authMessage(rec, text) {
     if (rec.closed || rec.authenticated) return
@@ -163,7 +212,18 @@ class BotManager extends EventEmitter {
     if (rec.registered) this.stats.registrations++
     this.stats.authTimeMsTotal += Date.now() - rec.authStarted
     this.event('authenticated', { username: rec.username })
+    const auth = this.config.auth || {}
+    if (auth.chatTestMessage) {
+      const delay = setTimeout(() => this.sendChatTest(rec, auth.chatTestMessage), auth.chatAfterSuccessDelayMs ?? 500)
+      rec.timers.push(delay)
+    }
     this.startMovement(rec)
+  }
+  sendChatTest(rec, template) {
+    if (rec.closed) return
+    const message = String(template).replace(/\{username\}/g, () => rec.username)
+    try { rec.bot.chat(message); this.event('chat_test_sent', { username: rec.username }) }
+    catch (_) { this.event('chat_test_error', { username: rec.username }) }
   }
   startMovement(rec) {
     const movement = this.config.movement || {}
@@ -233,7 +293,9 @@ class BotManager extends EventEmitter {
   snapshot() {
     const clients = [...this.bots.values()]
     const latencies = clients.map(r => r.bot?.player?.ping).filter(Number.isFinite)
-    return { ...this.stats, target: this.target, connected: clients.filter(r => r.connected).length, authenticated: clients.filter(r => r.authenticated).length, connecting: clients.filter(r => !r.connected).length, latencyMs: latencies.length ? latencies.reduce((a, b) => a + b, 0) / latencies.length : null, avgConnectMs: this.stats.connectedTotal ? this.stats.connectTimeMsTotal / this.stats.connectedTotal : null, avgAuthMs: this.stats.authSuccess ? this.stats.authTimeMsTotal / this.stats.authSuccess : null }
+    const activeById = new Map(clients.map(rec => [rec.id, rec]))
+    const bots = [...this.botStates.values()].map(bot => ({ ...bot, ping: activeById.get(bot.id)?.bot?.player?.ping ?? null })).sort((a, b) => a.id - b.id)
+    return { ...this.stats, target: this.target, connected: clients.filter(r => r.connected).length, authenticated: clients.filter(r => r.authenticated).length, connecting: clients.filter(r => !r.connected).length, latencyMs: latencies.length ? latencies.reduce((a, b) => a + b, 0) / latencies.length : null, avgConnectMs: this.stats.connectedTotal ? this.stats.connectTimeMsTotal / this.stats.connectedTotal : null, avgAuthMs: this.stats.authSuccess ? this.stats.authTimeMsTotal / this.stats.authSuccess : null, bots }
   }
   stop() { this.stopped = true; this.target = 0; clearInterval(this.timer); for (const rec of [...this.bots.values()]) this.close(rec, 'test complete') }
 }
