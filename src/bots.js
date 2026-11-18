@@ -131,15 +131,16 @@ class BotManager extends EventEmitter {
       const spawnTimeout = setTimeout(() => { if (!rec.spawned) this.close(rec, 'spawn timeout', false) }, this.config.spawnTimeoutMs || 45000)
       rec.spawnTimer = spawnTimeout
       rec.timers.push(spawnTimeout)
+      if (!this.config.auth?.chatTestOnly) this.beginAuthentication(rec)
     })
     bot.on('spawn', () => {
-      if (rec.closed || rec.authStarted) return
+      if (rec.closed || rec.spawned) return
       rec.spawned = true
       if (rec.spawnTimer) clearTimeout(rec.spawnTimer)
       this.event('spawned', { username })
-      rec.authStarted = Date.now()
       const auth = this.config.auth || {}
       if (auth.chatTestOnly) {
+        rec.authStarted = Date.now()
         const delay = setTimeout(() => {
           if (rec.closed) return
           const message = String(auth.chatTestMessage || 'LoadTest: {username} chat test').replace(/\{username\}/g, () => rec.username)
@@ -150,17 +151,7 @@ class BotManager extends EventEmitter {
         rec.timers.push(delay)
         return
       }
-      if (auth.enabled === false) return this.authenticate(rec)
-      const wait = setTimeout(() => {
-        if (!rec.authenticated) { this.stats.authFailures++; this.event('auth_failure', { username: rec.username, reason: 'authentication timeout' }); this.close(rec, 'authentication timeout', false) }
-      }, auth.timeoutMs || 30000)
-      rec.timers.push(wait)
-      for (const message of rec.pendingMessages || []) this.authMessage(rec, message)
-      rec.pendingMessages = []
-      if (auth.initialCommand === 'register' || auth.initialCommand === 'login') {
-        const delay = setTimeout(() => this.sendAuth(rec, auth.initialCommand), auth.initialDelayMs ?? 1500)
-        rec.timers.push(delay)
-      }
+      this.beginAuthentication(rec)
     })
     bot.on('messagestr', message => {
       const text = this.redact(String(message))
@@ -186,6 +177,22 @@ class BotManager extends EventEmitter {
       if (typeof write === 'function') bot._client.write = (...args) => { this.stats.packetsOut++; return write.apply(bot._client, args) }
     }
   }
+  beginAuthentication(rec) {
+    if (rec.closed || rec.authStarted || this.config.auth?.chatTestOnly) return
+    rec.authStarted = Date.now()
+    const auth = this.config.auth || {}
+    if (auth.enabled === false) return this.authenticate(rec)
+    const wait = setTimeout(() => {
+      if (!rec.authenticated) { this.stats.authFailures++; this.event('auth_failure', { username: rec.username, reason: 'authentication timeout' }); this.close(rec, 'authentication timeout', false) }
+    }, auth.timeoutMs || 30000)
+    rec.timers.push(wait)
+    for (const message of rec.pendingMessages || []) this.authMessage(rec, message)
+    rec.pendingMessages = []
+    if (auth.initialCommand === 'register' || auth.initialCommand === 'login') {
+      const delay = setTimeout(() => this.sendAuth(rec, auth.initialCommand), auth.initialDelayMs ?? 1500)
+      rec.timers.push(delay)
+    }
+  }
   redact(text) {
     const password = this.config.auth?.password
     return password ? String(text).split(password).join('[hidden]') : String(text)
@@ -194,16 +201,24 @@ class BotManager extends EventEmitter {
     if (rec.closed || rec.authenticated) return
     const a = this.config.auth || {}
     if (a.chatTestOnly) return
-    // A plugin can send its prompt before spawn; never send before the client is in play.
+    // Buffer auth messages until the client logs in and the auth workflow starts.
     if (!rec.authStarted) { (rec.pendingMessages ||= []).push(text); if (rec.pendingMessages.length > 10) rec.pendingMessages.shift(); return }
-    if (pattern(a.success, '(you are now authenticated|successfully (logged in|registered)|login successful|registration successful)').test(text)) return this.authenticate(rec)
+    if (pattern(a.success, '(you are now authenticated|successfully (logged in|registered)|login successful|registration successful|valid session.*no need to log in|already authenticated)').test(text)) return this.authenticate(rec)
     if (pattern(a.commandFailure, '(incorrect argument for command|unknown or incomplete command|expected .+ at position)').test(text)) {
       this.stats.authFailures++; this.event('auth_failure', { username: rec.username, reason: 'command syntax rejected' }); return this.close(rec, 'command syntax rejected', false)
     }
     if (pattern(a.failure, '(incorrect password|wrong password|authentication failed)').test(text)) {
       this.stats.authFailures++; this.event('auth_failure', { username: rec.username, reason: 'authentication rejected' }); return this.close(rec, 'authentication rejected', false)
     }
-    if (a.fixedMode) return
+    if (a.fixedMode) {
+      const prompt = a.initialCommand === 'register'
+        ? pattern(a.registerPrompt, '(?:/register|please register)').test(text)
+        : a.initialCommand === 'login'
+          ? pattern(a.loginPrompt, '(?:/login|please log ?in)').test(text)
+          : false
+      if (prompt) this.sendAuth(rec, a.initialCommand)
+      return
+    }
     if (pattern(a.registerPrompt, '(?:/register|please register)').test(text)) this.sendAuth(rec, 'register')
     else if (pattern(a.loginPrompt, '(?:/login|please log ?in)').test(text)) this.sendAuth(rec, 'login')
   }
@@ -311,6 +326,16 @@ class BotManager extends EventEmitter {
     const bots = [...this.botStates.values()].map(bot => ({ ...bot, ping: activeById.get(bot.id)?.bot?.player?.ping ?? null })).sort((a, b) => a.id - b.id)
     return { ...this.stats, target: this.target, connected: clients.filter(r => r.connected).length, authenticated: clients.filter(r => r.authenticated).length, connecting: clients.filter(r => !r.connected).length, latencyMs: latencies.length ? latencies.reduce((a, b) => a + b, 0) / latencies.length : null, avgConnectMs: this.stats.connectedTotal ? this.stats.connectTimeMsTotal / this.stats.connectedTotal : null, avgAuthMs: this.stats.authSuccess ? this.stats.authTimeMsTotal / this.stats.authSuccess : null, bots }
   }
-  stop() { this.stopped = true; this.target = 0; clearInterval(this.timer); for (const rec of [...this.bots.values()]) this.close(rec, 'test complete') }
+  stop() {
+    this.stopped = true
+    this.target = 0
+    clearInterval(this.timer)
+    const stoppedAt = new Date().toISOString()
+    for (const state of this.botStates.values()) {
+      state.status = 'stopped'
+      state.updatedAt = stoppedAt
+    }
+    for (const rec of [...this.bots.values()]) this.close(rec, 'test complete')
+  }
 }
 module.exports = { BotManager, renderCommand }

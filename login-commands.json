@@ -3,7 +3,7 @@
   "loginCommand": "/login {password}",
   "registerPrompt": "(?:/register|please register)",
   "loginPrompt": "(?:/login|please log ?in)",
-  "success": "(you are now authenticated|successfully (logged in|registered)|login successful|registration successful)",
+  "success": "(you are now authenticated|successfully (logged in|registered)|login successful|registration successful|valid session.*no need to log in|already authenticated)",
   "failure": "(incorrect password|wrong password|authentication failed|passwords must match|password must be at least|password can be at most|already registered|incorrect global password|too many accounts from your ip)",
   "commandFailure": "(incorrect argument for command|unknown or incomplete command|expected .+ at position)",
   "timeoutMs": 30000
