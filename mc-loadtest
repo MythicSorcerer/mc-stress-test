@@ -37,10 +37,19 @@ function parseTarget(value) {
 
 async function askBotCount(rl) {
   for (;;) {
-    const input = (await rl.question(`Bot count (1-${MAX_BOTS}) [40]: `)).trim()
-    const count = input === '' ? 40 : Number(input)
+    const input = (await rl.question(`Bot count (1-${MAX_BOTS}) [20]: `)).trim()
+    const count = input === '' ? 20 : Number(input)
     if (Number.isInteger(count) && count >= 1 && count <= MAX_BOTS) return count
     console.log(`Enter a whole number from 1 to ${MAX_BOTS}.`)
+  }
+}
+
+async function askAuthMode(rl) {
+  for (;;) {
+    const input = (await rl.question('Accounts already registered? [L]ogin / [R]egister: ')).trim().toLowerCase()
+    if (input === 'l') return 'login'
+    if (input === 'r') return 'register'
+    console.log('Enter L to log in existing accounts or R to register new ones.')
   }
 }
 
@@ -121,13 +130,15 @@ async function main() {
   if (!process.stdin.isTTY || !process.stdout.isTTY) throw new Error('Run ./mc-loadtest in an interactive terminal.')
   const commands = loadCommands()
   const rl = readline.createInterface({ input: stdin, output: stdout })
-  let count, target
+  let count, target, authMode
   try {
     console.log('\nMinecraft clone load test\n')
     count = await askBotCount(rl)
     target = await askTarget(rl)
+    authMode = await askAuthMode(rl)
     console.log(`\nTarget: ${target.host}:${target.port}`)
     console.log(`Bots:   ${count}`)
+    console.log(`Auth:   ${authMode === 'login' ? '/login <password>' : '/register <password> <password>'}`)
     console.log('Mode:   walk around the spawn area')
     const confirmation = (await rl.question('\nConfirm this is your isolated clone. Type YES to connect: ')).trim()
     if (confirmation !== 'YES') throw new Error('Confirmation did not match; no bots were started.')
@@ -145,7 +156,7 @@ async function main() {
     spawnRate: 1,
     maxReconnects: 2,
     seed: Date.now(),
-    auth: { ...commands, password },
+    auth: { ...commands, password, fixedMode: true, initialCommand: authMode, initialDelayMs: 3000 },
     movement: { intervalMs: 1500, radius: 32 }
   }
 
