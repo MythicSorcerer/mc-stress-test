@@ -131,6 +131,7 @@ class BotManager extends EventEmitter {
     if (pattern(a.failure, '(incorrect password|wrong password|authentication failed)').test(text)) {
       this.stats.authFailures++; this.event('auth_failure', { username: rec.username, reason: 'authentication rejected' }); return this.close(rec, 'authentication rejected', false)
     }
+    if (a.fixedMode) return
     if (pattern(a.registerPrompt, '(?:/register|please register)').test(text)) this.sendAuth(rec, 'register')
     else if (pattern(a.loginPrompt, '(?:/login|please log ?in)').test(text)) this.sendAuth(rec, 'login')
   }
