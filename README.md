@@ -1,6 +1,6 @@
 # Minecraft load test CLI
 
-A command-line Minecraft clone load tester with a local monitoring dashboard. It can connect idle bots in chat-only mode, or run `/login` and `/register` checks with a shared test password. The dashboard shows each bot's connection state and the incoming chat it receives.
+A command-line Minecraft clone load tester with a local monitoring dashboard. It can connect bots in chat-only mode, run `/login` and `/register` checks with a shared test password, and optionally make authenticated or chat-only bots move. The dashboard shows each bot's connection state and the incoming chat it receives.
 
 This is a private tool, not an npm package. `package.json` only installs the runtime dependency.
 
@@ -28,7 +28,7 @@ ssh -L 8787:127.0.0.1:8787 user@machine-running-the-tool
 
 Then open `http://127.0.0.1:8787` on your computer. Set a different local port with `MC_LOADTEST_UI_PORT=8788 npm run ui`.
 
-Choose a bot count (default 20), enter a clone server address, select a mode, and type `YES` to start. The dashboard connects at one bot per second and lets you stop the run. It displays connection attempts, reconnects, per-bot status, ping, incoming server chat, authentication events, and chat test markers.
+Choose a bot count (default 20), enter a clone server address, select an authentication mode and movement profile, and type `YES` to start. The dashboard connects at one bot per second and lets you stop the run. It displays connection attempts, reconnects, per-bot status, ping, incoming server chat, authentication events, and chat test markers.
 
 ### Modes
 
@@ -39,6 +39,14 @@ Choose a bot count (default 20), enter a clone server address, select a mode, an
 The login and register templates and the success/failure message patterns are read from `login-commands.json`. Use `{password}` in command templates. A hidden password field accepts the shared test password, keeps it in memory for the run, and clears the browser field after the run starts. Passwords are not included in the dashboard activity or chat feed; matching text in incoming server messages is replaced with `[hidden]`.
 
 The dashboard reports a bot as authenticated only when an incoming message matches the configured `success` pattern. If your auth plugin uses different wording, its messages remain visible in **Incoming chat** so you can tune `login-commands.json`. A bot that cannot connect, spawn, or authenticate retries up to five times, with a growing delay between attempts.
+
+### Movement profiles
+
+- **Stationary:** sends the chat marker and stays still.
+- **Wander:** walks around its spawn point, staying within about 32 blocks and occasionally pausing.
+- **Continuous:** keeps moving and sprints more often.
+
+In chat-only mode, movement starts after the bot sends its marker, so the dashboard confirms chat first.
 
 ## CLI
 

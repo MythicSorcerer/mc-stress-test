@@ -21,6 +21,7 @@ function page(token) {
 <label class="field"><span>Bot count</span><input id="count" type="number" min="1" max="100" value="20" required><div class="hint">Connects at one bot per second. Maximum 100.</div></label>
 <label class="field"><span>Clone server address</span><input id="target" type="text" placeholder="play.example.net or example.net:25570" required><div class="hint">Domains use the Minecraft SRV record when no port is entered. IPs default to 25565.</div></label>
 <label class="field"><span>Test mode</span><select id="mode"><option value="chat">Chat only (skip authentication)</option><option value="login">Login existing accounts · L · /login</option><option value="register">Register new accounts · R · /register</option></select></label>
+<label class="field"><span>Bot movement</span><select id="movement"><option value="stationary">Stationary</option><option value="wander">Wander within 32 blocks</option><option value="continuous">Continuous movement</option></select><div class="hint">Movement starts after the chat marker in chat-only mode.</div></label>
 <label class="field" id="passwordField" hidden><span>Shared test password</span><input id="password" type="password" autocomplete="new-password" maxlength="128" placeholder="Hidden from dashboard logs"><div class="hint">Sent privately to the clone’s auth plugin. It is not written to a file.</div></label>
 <label class="field"><span>Confirmation</span><input id="confirm" type="text" autocomplete="off" placeholder="Type YES to start" required></label>
 <div class="check">Run this only on an isolated clone you administer. Bots will connect to the resolved target shown in the dashboard.</div>
@@ -35,14 +36,14 @@ function page(token) {
 const TOKEN='${token}';const $=id=>document.getElementById(id);let events=[],chats=[],latestState={};
 const escTime=value=>{try{return new Date(value).toLocaleTimeString()}catch{return ''}};
 function statusClass(status){if(['authenticated','spawned','connected','chat sent'].includes(status))return 'good';if(['failed','auth failed','kicked','connection error'].includes(status))return 'bad';if(['connecting','reconnecting','authenticating'].includes(status))return 'warn';return ''}
-function drawState(s){latestState=s||{};const r=s.stats||{};$('connected').textContent=(r.connected||0)+' / '+(r.target||0);$('authenticated').textContent=r.authenticated||0;$('chatSent').textContent=r.chatTestSent||0;$('failed').textContent=r.failedConnections||0;$('resolvedTarget').textContent=s.target||'—';$('modeSummary').textContent=s.mode?(' · '+s.mode):'';$('authModeLabel').textContent=s.mode==='chat'?'chat-only skips auth':(s.mode==='register'?'register successes':'login successes');$('botCount').textContent=(r.bots||[]).length+' bots';$('runBadge').textContent=s.running?'Running · '+(s.mode||''): 'Idle · waiting for a run';$('runBadge').classList.toggle('live',!!s.running);$('startButton').disabled=!!s.running;$('stopButton').disabled=!s.running;
+function drawState(s){latestState=s||{};const r=s.stats||{};$('connected').textContent=(r.connected||0)+' / '+(r.target||0);$('authenticated').textContent=r.authenticated||0;$('chatSent').textContent=r.chatTestSent||0;$('failed').textContent=r.failedConnections||0;$('resolvedTarget').textContent=s.target||'—';$('modeSummary').textContent=s.mode?(' · '+s.mode+' · '+(s.movement||'stationary')):'';$('authModeLabel').textContent=s.mode==='chat'?'chat-only skips auth':(s.mode==='register'?'register successes':'login successes');$('botCount').textContent=(r.bots||[]).length+' bots';$('runBadge').textContent=s.running?'Running · '+(s.mode||'')+' · '+(s.movement||'stationary'): 'Idle · waiting for a run';$('runBadge').classList.toggle('live',!!s.running);$('startButton').disabled=!!s.running;$('stopButton').disabled=!s.running;
 const rows=r.bots||[];$('botRows').replaceChildren();if(!rows.length){const tr=document.createElement('tr'),td=document.createElement('td');td.colSpan=6;td.className='empty';td.textContent='Bots appear here after a test starts.';tr.append(td);$('botRows').append(tr)}else for(const b of rows){const tr=document.createElement('tr');const name=document.createElement('td');name.textContent=b.username;const st=document.createElement('td'),span=document.createElement('span'),dot=document.createElement('i');span.className='status';dot.className='dot '+statusClass(b.status);span.append(dot,document.createTextNode(b.status||'waiting'));st.append(span);const attempt=document.createElement('td');attempt.textContent=String(b.attempts||0);const retries=document.createElement('td');retries.textContent=String(b.reconnects||0);const ping=document.createElement('td');ping.textContent=b.ping==null?'—':Math.round(b.ping)+' ms';const detail=document.createElement('td');detail.textContent=b.reason||b.authMode||'';tr.append(name,st,attempt,retries,ping,detail);$('botRows').append(tr)}drawFeeds()}
 function drawFeeds(){ $('chatCount').textContent=chats.length+' messages';$('eventCount').textContent=events.length+' events';drawFeed('chatFeed',chats,'No server messages received yet.','chat');drawFeed('eventFeed',events,'No activity yet.','event') }
 function drawFeed(id,list,empty,type){const box=$(id);box.replaceChildren();if(!list.length){const d=document.createElement('div');d.className='empty';d.textContent=empty;box.append(d);return}for(const e of list.slice(-250)){const row=document.createElement('div');row.className=type==='chat'?'feedrow':'eventrow';const time=document.createElement('span');time.className='time';time.textContent=escTime(e.time);const who=document.createElement('span');who.className=type==='chat'?'botname':'botname';who.textContent=type==='chat'?e.username:(e.username||'system');const msg=document.createElement('span');msg.className='message';msg.textContent=type==='chat'?e.message:(e.type+(e.reason?': '+e.reason:e.command?': '+e.command:''));row.append(time,who,msg);box.append(row)}box.scrollTop=box.scrollHeight}
 function receive(e){if(e.type==='chat_message'){chats.push(e);if(chats.length>500)chats.shift()}else{events.push(e);if(events.length>300)events.shift()}drawFeeds()}
 async function refresh(){try{const r=await fetch('/api/state',{headers:{'x-session-token':TOKEN},cache:'no-store'});if(r.ok){const s=await r.json();drawState(s);if(s.chatMessages){chats=s.chatMessages;events=s.recentEvents||[];drawFeeds()}}}catch{}}
 $('mode').addEventListener('change',()=>{$('passwordField').hidden=$('mode').value==='chat'});
-$('startForm').addEventListener('submit',async ev=>{ev.preventDefault();const n=$('notice');n.className='notice';n.textContent='Resolving target and starting…';const body={count:Number($('count').value),target:$('target').value.trim(),mode:$('mode').value,password:$('password').value,confirmation:$('confirm').value.trim()};try{const r=await fetch('/api/start',{method:'POST',headers:{'content-type':'application/json','x-session-token':TOKEN},body:JSON.stringify(body)});const data=await r.json();if(!r.ok)throw new Error(data.error||'Could not start test.');$('password').value='';$('confirm').value='';n.className='notice ok';n.textContent='Started against '+data.target;chats=[];events=[];await refresh()}catch(err){n.className='notice error';n.textContent=err.message}});
+$('startForm').addEventListener('submit',async ev=>{ev.preventDefault();const n=$('notice');n.className='notice';n.textContent='Resolving target and starting…';const body={count:Number($('count').value),target:$('target').value.trim(),mode:$('mode').value,movement:$('movement').value,password:$('password').value,confirmation:$('confirm').value.trim()};try{const r=await fetch('/api/start',{method:'POST',headers:{'content-type':'application/json','x-session-token':TOKEN},body:JSON.stringify(body)});const data=await r.json();if(!r.ok)throw new Error(data.error||'Could not start test.');$('password').value='';$('confirm').value='';n.className='notice ok';n.textContent='Started against '+data.target;chats=[];events=[];await refresh()}catch(err){n.className='notice error';n.textContent=err.message}});
 $('stopButton').addEventListener('click',async()=>{try{await fetch('/api/stop',{method:'POST',headers:{'x-session-token':TOKEN}});$('notice').className='notice';$('notice').textContent='Stopping bots…';await refresh()}catch{}});
 async function init(){await refresh();const source=new EventSource('/api/events?token='+encodeURIComponent(TOKEN));source.onmessage=ev=>{try{const d=JSON.parse(ev.data);if(d.kind==='event')receive(d.event);else if(d.kind==='state')drawState(d.state)}catch{}};setInterval(refresh,5000)}init();
 </script></body></html>`
@@ -69,12 +70,13 @@ function startWebUI() {
   let running = false
   let targetLabel = ''
   let modeLabel = ''
+  let movementLabel = ''
   let startedAt = null
   let recentEvents = []
   let chatMessages = []
 
   const state = (includeFeeds = false) => ({
-    running, target: targetLabel, mode: modeLabel, startedAt,
+    running, target: targetLabel, mode: modeLabel, movement: movementLabel, startedAt,
     stats: manager ? manager.snapshot() : { target: 0, connected: 0, authenticated: 0, failedConnections: 0, chatTestSent: 0, bots: [] },
     ...(includeFeeds ? { recentEvents: recentEvents.slice(-300), chatMessages: chatMessages.slice(-500) } : {})
   })
@@ -124,6 +126,7 @@ function startWebUI() {
       if (!Number.isInteger(count) || count < 1 || count > MAX_BOTS) return safeJson(res, 400, { error: `Choose a whole number from 1 to ${MAX_BOTS}.` })
       if (body.confirmation !== 'YES') return safeJson(res, 400, { error: 'Type YES in the confirmation field to start.' })
       if (!['chat', 'login', 'register'].includes(body.mode)) return safeJson(res, 400, { error: 'Choose chat, login, or register mode.' })
+      if (!['stationary', 'wander', 'continuous'].includes(body.movement)) return safeJson(res, 400, { error: 'Choose stationary, wander, or continuous movement.' })
       if (body.mode !== 'chat' && (typeof body.password !== 'string' || !body.password.length || body.password.length > 128)) return safeJson(res, 400, { error: 'Enter a test password of 1 to 128 characters.' })
       let target
       try { target = await resolveTargetInput(String(body.target || '')) } catch (error) { return safeJson(res, 400, { error: error.message }) }
@@ -149,6 +152,7 @@ function startWebUI() {
           }
       targetLabel = formatTarget(target)
       modeLabel = body.mode
+      movementLabel = body.movement
       startedAt = new Date().toISOString()
       recentEvents = []
       chatMessages = []
@@ -167,7 +171,7 @@ function startWebUI() {
           broadcast({ kind: 'event', event: item })
           broadcast({ kind: 'state', state: state(false) })
         })
-        manager.setTarget(count, 'idle')
+        manager.setTarget(count, ({ stationary: 'idle', wander: 'low', continuous: 'high' })[body.movement])
       } catch (error) {
         running = false
         manager?.stop()

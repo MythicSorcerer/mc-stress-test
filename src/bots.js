@@ -137,6 +137,7 @@ class BotManager extends EventEmitter {
           const message = String(auth.chatTestMessage || 'LoadTest: {username} chat test').replace(/\{username\}/g, () => rec.username)
           try { rec.bot.chat(message); this.event('chat_test_sent', { username: rec.username }) }
           catch (_) { this.event('chat_test_error', { username: rec.username }) }
+          this.startMovement(rec)
         }, auth.chatTestDelayMs ?? 3000)
         rec.timers.push(delay)
         return
@@ -231,7 +232,7 @@ class BotManager extends EventEmitter {
     let previous = null
     const update = () => {
       const bot = rec.bot
-      if (rec.closed || !rec.authenticated || !bot.entity?.position) return
+      if (rec.closed || (!rec.authenticated && !this.config.auth?.chatTestOnly) || !bot.entity?.position) return
       const mode = rec.mode
       if (mode === 'idle') { this.clearControls(bot); return }
       const p = bot.entity.position
