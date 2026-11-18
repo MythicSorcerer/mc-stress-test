@@ -44,7 +44,7 @@ function drawState(s){latestState=s||{};const r=s.stats||{};$('connected').textC
 const rows=r.bots||[];$('botRows').replaceChildren();if(!rows.length){const tr=document.createElement('tr'),td=document.createElement('td');td.colSpan=6;td.className='empty';td.textContent='Bots appear here after a test starts.';tr.append(td);$('botRows').append(tr)}else for(const b of rows){const tr=document.createElement('tr');const name=document.createElement('td');name.textContent=b.username;const st=document.createElement('td'),span=document.createElement('span'),dot=document.createElement('i');span.className='status';dot.className='dot '+statusClass(b.status);span.append(dot,document.createTextNode(b.status||'waiting'));st.append(span);const attempt=document.createElement('td');attempt.textContent=String(b.attempts||0);const retries=document.createElement('td');retries.textContent=String(b.reconnects||0);const ping=document.createElement('td');ping.textContent=b.ping==null?'—':Math.round(b.ping)+' ms';const detail=document.createElement('td');detail.textContent=b.reason||b.authMode||'';tr.append(name,st,attempt,retries,ping,detail);$('botRows').append(tr)}drawFeeds()}
 function drawFeeds(){ $('chatCount').textContent=chats.length+' messages';$('eventCount').textContent=events.length+' events';drawFeed('chatFeed',chats,'No server messages received yet.','chat');drawFeed('eventFeed',events,'No activity yet.','event') }
 function drawFeed(id,list,empty,type){const box=$(id);box.replaceChildren();if(!list.length){const d=document.createElement('div');d.className='empty';d.textContent=empty;box.append(d);return}for(const e of list.slice(-250)){const row=document.createElement('div');row.className=type==='chat'?'feedrow':'eventrow';const time=document.createElement('span');time.className='time';time.textContent=escTime(e.time);const who=document.createElement('span');who.className=type==='chat'?'botname':'botname';who.textContent=type==='chat'?e.username:(e.username||'system');const msg=document.createElement('span');msg.className='message';const detail=e.reason||e.safeCommand||e.command||'';msg.textContent=type==='chat'?e.message:(e.type+(detail?': '+detail:''));row.append(time,who,msg);box.append(row)}box.scrollTop=box.scrollHeight}
-function receive(e){if(e.type==='chat_message'){chats.push(e);if(chats.length>500)chats.shift()}else{events.push(e);if(events.length>300)events.shift()}drawFeeds()}
+function receive(e){if(e.type==='chat_message'||e.type==='chat_notice'){chats.push(e);if(chats.length>500)chats.shift()}else{events.push(e);if(events.length>300)events.shift()}drawFeeds()}
 async function refresh(){try{const r=await fetch('/api/state',{headers:{'x-session-token':TOKEN},cache:'no-store'});if(r.ok){const s=await r.json();drawState(s);if(s.chatMessages){chats=s.chatMessages;events=s.recentEvents||[];drawFeeds()}}}catch{}}
 $('mode').addEventListener('change',()=>{$('passwordField').hidden=$('mode').value==='chat'});
 $('startForm').addEventListener('submit',async ev=>{ev.preventDefault();const n=$('notice');n.className='notice';n.textContent='Resolving target and starting…';const body={count:Number($('count').value),target:$('target').value.trim(),mode:$('mode').value,movement:$('movement').value,password:$('password').value,confirmation:$('confirm').value.trim()};try{const r=await fetch('/api/start',{method:'POST',headers:{'content-type':'application/json','x-session-token':TOKEN},body:JSON.stringify(body)});const data=await r.json();if(!r.ok)throw new Error(data.error||'Could not start test.');$('password').value='';$('confirm').value='';n.className='notice ok';n.textContent='Started against '+data.target;chats=[];events=[];await refresh()}catch(err){n.className='notice error';n.textContent=err.message}});
@@ -172,7 +172,21 @@ function startWebUI() {
         require.resolve('@wp2508/mineflayer')
         manager = new BotManager(config, item => {
           if (item.type === 'chat_message') { chatMessages.push(item); if (chatMessages.length > 500) chatMessages.shift() }
-          else { recentEvents.push(item); if (recentEvents.length > 300) recentEvents.shift() }
+          else {
+            recentEvents.push(item)
+            if (recentEvents.length > 300) recentEvents.shift()
+            const notice = item.type === 'authenticated'
+              ? 'Load test: server confirmed authentication.'
+              : item.type === 'chat_test_sent'
+                ? 'Load test: chat marker sent; waiting for server echo.'
+                : null
+            if (notice) {
+              const chatNotice = { time: item.time, type: 'chat_notice', username: item.username, message: notice }
+              chatMessages.push(chatNotice)
+              if (chatMessages.length > 500) chatMessages.shift()
+              broadcast({ kind: 'event', event: chatNotice })
+            }
+          }
           broadcast({ kind: 'event', event: item })
           broadcast({ kind: 'state', state: state(false) })
         })
