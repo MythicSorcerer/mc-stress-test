@@ -28,6 +28,8 @@ ssh -L 8787:127.0.0.1:8787 user@machine-running-the-tool
 
 Then open `http://127.0.0.1:8787` on your computer. Set a different local port with `MC_LOADTEST_UI_PORT=8788 npm run ui`.
 
+Use the **Light mode** toggle in the header to switch themes; the preference is saved in that browser.
+
 Choose a bot count (default 20), enter a clone server address, select an authentication mode and movement profile, and type `YES` to start. The dashboard connects at one bot per second and lets you stop the run. It displays connection attempts, reconnects, per-bot status, ping, incoming server chat, authentication events, and chat test markers.
 
 ### Modes
@@ -36,9 +38,9 @@ Choose a bot count (default 20), enter a clone server address, select an authent
 - **Login:** sends `/login <password>` three seconds after spawn.
 - **Register:** sends `/register <password> <password>` three seconds after spawn.
 
-The login and register templates and the success/failure message patterns are read from `login-commands.json`. Use `{password}` in command templates. A hidden password field accepts the shared test password, keeps it in memory for the run, and clears the browser field after the run starts. Passwords are not included in the dashboard activity or chat feed; matching text in incoming server messages is replaced with `[hidden]`.
+The login and register templates and the success/failure message patterns are read from `login-commands.json`. Use `{password}` in command templates. Passwords containing spaces or Brigadier-special characters are wrapped in escaped quotes automatically; enter the password itself without adding quote marks. A hidden password field accepts the shared test password, keeps it in memory for the run, and clears the browser field after the run starts. Passwords are not included in the dashboard activity or chat feed; matching text in incoming server messages is replaced with `[hidden]`.
 
-The dashboard reports a bot as authenticated only when an incoming message matches the configured `success` pattern. If your auth plugin uses different wording, its messages remain visible in **Incoming chat** so you can tune `login-commands.json`. A bot that cannot connect, spawn, or authenticate retries up to five times, with a growing delay between attempts.
+The dashboard reports a bot as authenticated only when an incoming message matches the configured `success` pattern. The default pattern includes EasyAuth's “You are now authenticated.” reply for both successful registration and login. The activity feed shows the command shape sent to each bot with the password hidden, including quotes when the password needs them. If your auth plugin uses different wording, its messages remain visible in **Incoming chat** so you can tune `login-commands.json`. A bot that cannot connect, spawn, or authenticate retries up to five times, with a growing delay between attempts.
 
 ### Movement profiles
 

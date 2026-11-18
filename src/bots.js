@@ -10,8 +10,16 @@ function pattern(value, fallback) {
   if (value instanceof RegExp) return value
   return new RegExp(value || fallback, 'i')
 }
+function passwordArgument(password) {
+  const value = String(password)
+  // Brigadier's StringArgumentType.string accepts either a bare word or an escaped quoted phrase.
+  return /^[A-Za-z0-9_.+-]+$/.test(value)
+    ? value
+    : `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`
+}
 function renderCommand(template, password) {
-  return template.replace(/\{password\}/g, () => password)
+  const argument = passwordArgument(password)
+  return template.replace(/\{password\}/g, () => argument)
 }
 
 /** A rate-limited group of offline Mineflayer clients. Server auth must be confirmed by a configured success message. */
@@ -188,7 +196,10 @@ class BotManager extends EventEmitter {
     if (a.chatTestOnly) return
     // A plugin can send its prompt before spawn; never send before the client is in play.
     if (!rec.authStarted) { (rec.pendingMessages ||= []).push(text); if (rec.pendingMessages.length > 10) rec.pendingMessages.shift(); return }
-    if (pattern(a.success, '(successfully (logged in|registered)|login successful|registration successful)').test(text)) return this.authenticate(rec)
+    if (pattern(a.success, '(you are now authenticated|successfully (logged in|registered)|login successful|registration successful)').test(text)) return this.authenticate(rec)
+    if (pattern(a.commandFailure, '(incorrect argument for command|unknown or incomplete command|expected .+ at position)').test(text)) {
+      this.stats.authFailures++; this.event('auth_failure', { username: rec.username, reason: 'command syntax rejected' }); return this.close(rec, 'command syntax rejected', false)
+    }
     if (pattern(a.failure, '(incorrect password|wrong password|authentication failed)').test(text)) {
       this.stats.authFailures++; this.event('auth_failure', { username: rec.username, reason: 'authentication rejected' }); return this.close(rec, 'authentication rejected', false)
     }
@@ -203,7 +214,9 @@ class BotManager extends EventEmitter {
     const template = type === 'register' ? (a.registerCommand || '/register {password} {password}') : (a.loginCommand || '/login {password}')
     rec.commandSent = true
     rec.registered = type === 'register'
-    try { rec.bot.chat(renderCommand(template, a.password)); this.event('auth_command', { username: rec.username, command: type }) }
+    const passwordShape = passwordArgument(a.password).startsWith('"') ? '"<password>"' : '<password>'
+    const safeCommand = type === 'register' ? `/register ${passwordShape} ${passwordShape}` : `/login ${passwordShape}`
+    try { rec.bot.chat(renderCommand(template, a.password)); this.event('auth_command', { username: rec.username, command: type, safeCommand }) }
     catch (_) { this.stats.authFailures++; this.close(rec, 'authentication command failed', false) }
   }
   authenticate(rec) {
