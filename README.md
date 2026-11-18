@@ -36,4 +36,3 @@ This uses the third-party `@wp2508/mineflayer` fork because it claims Minecraft 
 ## Safety
 
 Run this only against an isolated copy of a server you administer. Confirm the IP shown by the CLI is the clone before typing `YES`. Use a separate authentication database and a disposable bot password. The server must be configured for offline-mode registration and have enough player slots for the test.
-

@@ -1,0 +1,9 @@
+{
+  "registerCommand": "/register {password} {password}",
+  "loginCommand": "/login {password}",
+  "registerPrompt": "(?:/register|please register)",
+  "loginPrompt": "(?:/login|please log ?in)",
+  "success": "(successfully (logged in|registered)|login successful|registration successful)",
+  "failure": "(incorrect password|wrong password|authentication failed)",
+  "timeoutMs": 30000
+}

@@ -1,0 +1,10 @@
+{
+  "name": "mc-stress-test-cli",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Interactive CLI for load-testing an isolated Minecraft server clone",
+  "engines": { "node": ">=20" },
+  "dependencies": {
+    "@wp2508/mineflayer": "4.42.8"
+  }
+}

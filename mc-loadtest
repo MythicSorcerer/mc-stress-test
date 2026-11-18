@@ -1,0 +1,199 @@
+#!/usr/bin/env node
+'use strict'
+
+const fs = require('node:fs')
+const net = require('node:net')
+const path = require('node:path')
+const readline = require('node:readline/promises')
+const { stdin, stdout } = require('node:process')
+const { BotManager } = require('./src/bots')
+
+const MAX_BOTS = 100
+const DEFAULT_PORT = 25565
+const COMMANDS_FILE = path.join(__dirname, 'login-commands.json')
+
+function parseTarget(value) {
+  const input = value.trim()
+  let host = input
+  let port = DEFAULT_PORT
+  const bracketed = input.match(/^\[([^\]]+)\](?::(\d+))?$/)
+  if (bracketed) {
+    host = bracketed[1]
+    if (bracketed[2]) port = Number(bracketed[2])
+  } else if (net.isIP(input) === 6) {
+    host = input
+  } else {
+    const withPort = input.match(/^([^:]+):(\d+)$/)
+    if (withPort) {
+      host = withPort[1]
+      port = Number(withPort[2])
+    }
+  }
+  if (net.isIP(host) === 0) throw new Error('Enter an IPv4 or IPv6 address, optionally followed by :port.')
+  if (host === '0.0.0.0' || host === '::') throw new Error('That is a wildcard address; enter the clone server IP.')
+  if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('Port must be between 1 and 65535.')
+  return { host, port }
+}
+
+async function askBotCount(rl) {
+  for (;;) {
+    const input = (await rl.question(`Bot count (1-${MAX_BOTS}) [40]: `)).trim()
+    const count = input === '' ? 40 : Number(input)
+    if (Number.isInteger(count) && count >= 1 && count <= MAX_BOTS) return count
+    console.log(`Enter a whole number from 1 to ${MAX_BOTS}.`)
+  }
+}
+
+async function askTarget(rl) {
+  for (;;) {
+    const input = await rl.question('Clone server IP [port optional, default 25565]: ')
+    try { return parseTarget(input) } catch (error) { console.log(error.message) }
+  }
+}
+
+function loadCommands() {
+  if (!fs.existsSync(COMMANDS_FILE)) {
+    const defaults = {
+      registerCommand: '/register {password} {password}',
+      loginCommand: '/login {password}',
+      registerPrompt: '(?:/register|please register)',
+      loginPrompt: '(?:/login|please log ?in)',
+      success: '(successfully (logged in|registered)|login successful|registration successful)',
+      failure: '(incorrect password|wrong password|authentication failed)',
+      timeoutMs: 30000
+    }
+    fs.writeFileSync(COMMANDS_FILE, `${JSON.stringify(defaults, null, 2)}\n`, { mode: 0o600, flag: 'wx' })
+    console.log(`Created ${COMMANDS_FILE}; edit it if your auth plugin uses different commands or messages.`)
+  }
+  const config = JSON.parse(fs.readFileSync(COMMANDS_FILE, 'utf8'))
+  for (const key of ['registerCommand', 'loginCommand']) {
+    if (typeof config[key] !== 'string' || !config[key].includes('{password}')) {
+      throw new Error(`${COMMANDS_FILE}: ${key} must be a command string containing {password}.`)
+    }
+  }
+  for (const key of ['registerPrompt', 'loginPrompt', 'success', 'failure']) {
+    if (typeof config[key] !== 'string') throw new Error(`${COMMANDS_FILE}: ${key} must be a regular-expression string.`)
+    try { new RegExp(config[key], 'i') } catch { throw new Error(`${COMMANDS_FILE}: ${key} is not a valid regular expression.`) }
+  }
+  return config
+}
+
+function askHidden(prompt) {
+  if (!stdin.isTTY || typeof stdin.setRawMode !== 'function') {
+    return Promise.reject(new Error('Run this command in an interactive terminal to enter the bot password securely.'))
+  }
+  return new Promise((resolve, reject) => {
+    let value = ''
+    stdout.write(prompt)
+    stdin.setRawMode(true)
+    stdin.resume()
+    const finish = (error) => {
+      stdin.off('data', onData)
+      stdin.setRawMode(false)
+      stdout.write('\n')
+      error ? reject(error) : resolve(value)
+    }
+    const onData = chunk => {
+      for (const char of chunk.toString('utf8')) {
+        if (char === '\u0003') return finish(new Error('Cancelled.'))
+        if (char === '\r' || char === '\n') return finish()
+        if (char === '\u0008' || char === '\u007f') {
+          if (value.length) { value = value.slice(0, -1); stdout.write('\b \b') }
+        } else if (char >= ' ') {
+          value += char
+          stdout.write('*')
+        }
+      }
+    }
+    stdin.on('data', onData)
+  })
+}
+
+async function getPassword() {
+  const fromEnv = process.env.MC_LOADTEST_PASSWORD
+  if (fromEnv) return fromEnv
+  const password = await askHidden('Shared test bot password (input hidden): ')
+  if (!password) throw new Error('The bot password cannot be empty.')
+  return password
+}
+
+async function main() {
+  if (!process.stdin.isTTY || !process.stdout.isTTY) throw new Error('Run ./mc-loadtest in an interactive terminal.')
+  const commands = loadCommands()
+  const rl = readline.createInterface({ input: stdin, output: stdout })
+  let count, target
+  try {
+    console.log('\nMinecraft clone load test\n')
+    count = await askBotCount(rl)
+    target = await askTarget(rl)
+    console.log(`\nTarget: ${target.host}:${target.port}`)
+    console.log(`Bots:   ${count}`)
+    console.log('Mode:   walk around the spawn area')
+    const confirmation = (await rl.question('\nConfirm this is your isolated clone. Type YES to connect: ')).trim()
+    if (confirmation !== 'YES') throw new Error('Confirmation did not match; no bots were started.')
+  } finally {
+    if (!rl.closed) rl.close()
+  }
+
+  const password = await getPassword()
+  const config = {
+    host: target.host,
+    port: target.port,
+    version: '26.3',
+    protocolAdapter: 'experimental-26.3',
+    maxBots: count,
+    spawnRate: 1,
+    maxReconnects: 2,
+    seed: Date.now(),
+    auth: { ...commands, password },
+    movement: { intervalMs: 1500, radius: 32 }
+  }
+
+  let manager
+  try {
+    require.resolve('@wp2508/mineflayer')
+    manager = new BotManager(config, event => {
+      if (event.type === 'authenticated') console.log(`\nAuthenticated: ${event.username}`)
+      else if (event.type === 'auth_failure') console.log(`\nAuth failed: ${event.username} (${event.reason})`)
+      else if (event.type === 'error') console.log(`\nClient error: ${event.username}`)
+      else if (event.type === 'kicked') console.log(`\nKicked: ${event.username}`)
+      else if (event.type === 'disconnected' && !event.intentional) console.log(`\nDisconnected: ${event.username} (${event.reason})`)
+    })
+  } catch {
+    throw new Error('Missing @wp2508/mineflayer. Install dependencies first with: npm install')
+  }
+
+  console.log('\nStarting connections at one bot per second. Press Ctrl-C to stop.\n')
+  manager.setTarget(count, 'local')
+  let done = false
+  let lastLineLength = 0
+  const render = () => {
+    const s = manager.snapshot()
+    const line = `Connected ${s.connected}/${count} · authenticated ${s.authenticated} · failed ${s.failedConnections} · reconnects ${s.reconnects}`
+    stdout.write(`\r${line.padEnd(lastLineLength, ' ')}`)
+    lastLineLength = Math.max(lastLineLength, line.length)
+  }
+  const status = setInterval(render, 1000)
+  render()
+  await new Promise(resolve => {
+    const stop = () => {
+      if (done) return
+      done = true
+      clearInterval(status)
+      manager.stop()
+      process.off('SIGINT', stop)
+      process.off('SIGTERM', stop)
+      stdout.write('\n\nBots disconnected.\n')
+      const s = manager.snapshot()
+      console.log(`Successful auth: ${s.authSuccess} · auth failures: ${s.authFailures} · failed connections: ${s.failedConnections}`)
+      resolve()
+    }
+    process.once('SIGINT', stop)
+    process.once('SIGTERM', stop)
+  })
+}
+
+main().catch(error => {
+  console.error(`\n${error.message}`)
+  process.exitCode = 1
+})
