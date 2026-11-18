@@ -99,6 +99,16 @@ class BotManager extends EventEmitter {
       if (rec.closed || rec.authStarted) return
       rec.authStarted = Date.now()
       const auth = this.config.auth || {}
+      if (auth.chatTestOnly) {
+        const delay = setTimeout(() => {
+          if (rec.closed) return
+          const message = String(auth.chatTestMessage || 'LoadTest: {username} chat test').replace(/\{username\}/g, () => rec.username)
+          try { rec.bot.chat(message); this.event('chat_test_sent', { username: rec.username }) }
+          catch (_) { this.event('chat_test_error', { username: rec.username }) }
+        }, auth.chatTestDelayMs ?? 3000)
+        rec.timers.push(delay)
+        return
+      }
       if (auth.enabled === false) return this.authenticate(rec)
       const wait = setTimeout(() => {
         if (!rec.authenticated) { this.stats.authFailures++; this.event('auth_failure', { username: rec.username, reason: 'authentication timeout' }); this.close(rec, 'authentication timeout', false) }
@@ -125,6 +135,7 @@ class BotManager extends EventEmitter {
   authMessage(rec, text) {
     if (rec.closed || rec.authenticated) return
     const a = this.config.auth || {}
+    if (a.chatTestOnly) return
     // A plugin can send its prompt before spawn; never send before the client is in play.
     if (!rec.authStarted) { (rec.pendingMessages ||= []).push(text); if (rec.pendingMessages.length > 10) rec.pendingMessages.shift(); return }
     if (pattern(a.success, '(successfully (logged in|registered)|login successful|registration successful)').test(text)) return this.authenticate(rec)
